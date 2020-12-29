@@ -1,166 +1,544 @@
 Require Import Coq.Init.Datatypes.
 Require Import Coq.Init.Nat.
 Require Import Coq.Lists.List. Import ListNotations.
-Require Export VerifShortestPathAlg.Graph. Import Graph.
+Require Import Coq.Lists.ListSet.
+Require Import Coq.Lists.ListDec.
+Require Import Coq.Classes.RelationClasses.
+Require Export Setoid.
+Require Export Relation_Definitions.
+
+From Coq Require Export Permutation.
+From Coq Require Import Lia.
+From Coq Require Export Arith.Arith.
+From Coq Require Export Bool.Bool.
+
+Require Recdef.
+
+Require Export VerifShortestPathAlg.Graph. Import DirectedWeightedGraph.
 
 Module Dijkstra.
 
-Inductive distance :=
-| reachable (d : weight)
-| unreachable.
+Inductive cost :=
+| value (v : nat)
+| INF.
 
-Inductive predecessor :=
-| pred_id (v : vertex_id)
-| undefined.
-
-Definition total_map (A : Type) := vertex_id -> option A.
-Definition empty_map {A : Type} : total_map A := fun _ => None.
-Definition update_map {A : Type} 
-  (prev_map : total_map A) (key : vertex_id) (val : A): total_map A :=
-  fun id => if id =? key then Some val else prev_map id.
-
-Definition total_map_pair (A : Type) := vertex_id * vertex_id -> option A.
-Definition empty_map_pair {A : Type} : total_map_pair A := fun _ => None.
-Definition update_map_pair {A : Type} 
-  (prev_map : total_map_pair A) 
-  (key : vertex_id * vertex_id) 
-  (val : A): total_map_pair A :=
-  fun pair => 
-    match pair with (u, v) =>
-      match key with (ku, kv) => 
-        if andb (ku =? u) (kv =? v) then Some val 
-        else prev_map pair
-      end
-    end.
-
-Definition dist_map := total_map distance.
-Definition pred_map := total_map predecessor.
-
-Definition weight_map := total_map_pair weight.
-
-Definition init_dist_map_iter
-  (s: vertex_id) (dist : dist_map) (v : vertex_id) : dist_map := 
-  if (v =? s) then update_map dist v (reachable 0)
-  else update_map dist v unreachable.
-Definition init_dist_map
-  (v_list : list vertex_id) (s : vertex_id) : dist_map :=
-  fold_left (init_dist_map_iter s) v_list empty_map.
-
-Definition init_pred_map_iter
-  (pred : pred_map) (v : vertex_id) : pred_map :=
-  update_map pred v undefined.
-Definition init_pred_map
-  (v_list : list vertex_id) : pred_map :=
-  fold_left init_pred_map_iter v_list empty_map.
-
-Definition init_single_source 
-  (v_list : list vertex_id) (s : vertex_id) : dist_map * pred_map :=
-  (init_dist_map v_list s, init_pred_map v_list).
-
-Definition init_weight_map_iter
-  (wm : weight_map) (e : edge) : weight_map :=
-  match e with (s, d, w) => update_map_pair wm (s, d) w end.
-Definition init_weight_map
-  (e_list : list edge) : weight_map :=
-  fold_left init_weight_map_iter e_list empty_map_pair.
-
-Definition init_weight_map_from_graph
-  (g : graph) : weight_map :=
-  match g with (_, e_list) => init_weight_map e_list end.
-
-Definition relax 
-  (wm : weight_map)
-  (u : vertex_id)
-  (dist_pred : dist_map * pred_map) 
-  (v : vertex_id) : dist_map * pred_map :=
-  match dist_pred with (dist, pred) =>
-    match dist u, dist v, wm (u, v) with
-    | Some (reachable du), Some unreachable, Some w =>
-      let dv' := du + w in
-      let dist' := update_map dist v (reachable dv') in
-      let pred' := update_map pred v (pred_id u) in
-      (dist', pred')
-    | Some (reachable du), Some (reachable dv), Some w =>
-      let sum_du_w := du + w in
-      if (sum_du_w <=? dv)
-      then
-        let dist' := update_map dist v (reachable sum_du_w) in
-        let pred' := update_map pred v (pred_id u) in
-        (dist', pred')
-      else
-        (dist, pred)
-    | _, _, _ => (dist, pred)
-    end
+Definition eq (c c' : cost) :=
+  match c, c' with
+  | value cv, value cv' => cv = cv'
+  | INF, INF => True
+  | _, _ => False
   end.
 
-Fixpoint select_priority {A : Type} 
-  (x : A) (l : list A) (has_priority_over : A -> A -> bool) : A * list A :=
+Definition eqb (c c' : cost) :=
+  match c, c' with
+  | value cv, value cv' => cv =? cv'
+  | INF, INF => true
+  | _, _ => false
+  end.
+
+Definition lt (c c' : cost) :=
+  match c, c' with
+  | value cv, value cv' => cv < cv'
+  | value _, INF => True
+  | INF, value _ => False
+  | INF, INF => False
+  end.
+
+Definition ltb (c c' : cost) :=
+  match c, c' with
+  | value cv, value cv' => cv <? cv'
+  | value _, INF => true
+  | INF, value _ => false
+  | INF, INF => false
+  end.
+
+Definition le (c c' : cost) :=
+  match c, c' with
+  | value cv, value cv' => cv <= cv'
+  | value _, INF => True
+  | INF, value _ => False
+  | INF, INF => True
+  end.
+
+Lemma eq_refl : Reflexive eq.
+Proof.
+  unfold Reflexive.
+  intros. destruct x ; reflexivity.
+Qed.
+
+Check (Symmetric).
+
+Lemma eq_sym : Symmetric eq.
+Proof.
+  unfold Symmetric. unfold eq.
+  intros. destruct x, y ; try (contradiction).
+  - rewrite H. reflexivity.
+  - tauto.
+Qed.
+
+Lemma eq_trans : Transitive eq.
+Proof.
+  unfold Transitive. unfold eq.
+  intros. destruct x, y, z ; try (contradiction).
+  - rewrite H, <- H0. reflexivity.
+  - tauto.
+Qed.
+
+Axiom eq_cost_refl : reflexive _ (eq).
+Axiom eq_cost_sym : symmetric _ (eq).
+Axiom eq_cost_trans : transitive _ (eq).
+
+Add Parametric Relation : (cost) (@eq)
+  reflexivity proved by (eq_cost_refl)
+  symmetry proved by (eq_cost_sym)
+  transitivity proved by (eq_cost_trans)
+  as eq_cost_rel.
+
+Goal eq (value 0) (value 0).
+Proof. intros. reflexivity. Qed.
+
+Lemma cost_in_le_fst_replaceable : forall c c' c'',
+  eq c c' -> le c' c'' -> le c c''.
+Proof.
+  unfold eq, le. intros.
+  destruct c, c', c''.
+  - rewrite H. assumption.
+  - tauto.
+  - contradiction.
+  - tauto.
+  - contradiction.
+  - tauto.
+  - contradiction.
+  - tauto.
+Qed.
+
+Lemma cost_in_le_snd_replaceable : forall c c' c'',
+  eq c c'' -> le c' c'' -> le c' c.
+Proof.
+  unfold eq, le. intros.
+  destruct c, c', c''.
+  - rewrite H. assumption.
+  - tauto.
+  - contradiction.
+  - tauto.
+  - contradiction.
+  - tauto.
+  - contradiction.
+  - tauto.
+Qed.
+
+Lemma le_c : forall (c : cost), le c c.
+Proof.
+  intros.
+  destruct c.
+  - unfold le. reflexivity.
+  - unfold le. tauto.
+Qed.
+
+Lemma le_refl : Reflexive le.
+Proof.
+  unfold Reflexive.
+  intros. apply le_c.
+Qed.
+
+Lemma eq_implies_le : forall (c c' : cost),
+  eq c c' -> le c c'.
+Proof.
+  unfold eq, le.
+  intros.
+  destruct c, c'. 
+  - rewrite H. reflexivity.
+  - contradiction.
+  - contradiction.
+  - assumption.
+Qed.
+
+Lemma le_trans : forall (c c' c'' : cost),
+  le c c' -> le c' c'' -> le c c''.
+Proof.
+  unfold le.
+  intros.
+  destruct c, c', c''; try (assumption).
+  - apply (PeanoNat.Nat.le_trans v v0 v1 H H0).
+  - contradiction.
+Qed.
+
+Definition leb (c c' : cost) :=
+  match c, c' with
+  | value cv, value cv' => cv <=? cv'
+  | value _, INF => true
+  | INF, value _ => false 
+  | INF, INF => true 
+  end.
+
+Definition add (c c' : cost) : cost :=
+  match c, c' with 
+  | value cv, value cv' => value (cv + cv')
+  | _, _ => INF
+  end.
+
+Lemma eqb_eq : forall (c c' : cost), eqb c c' = true <-> eq c c'.
+Proof.
+  intros.
+  split ; intros ; unfold eqb, eq in * ; destruct c, c'.
+  - apply Nat.eqb_eq in H. assumption.
+  - absurd (false = true).
+    + discriminate.
+    + assumption.
+  - absurd (false = true).
+    + discriminate.
+    + assumption.
+  - tauto.
+  - apply Nat.eqb_eq. assumption.
+  - contradiction.
+  - contradiction.
+  - reflexivity.
+Qed.
+
+Lemma ltb_lt : forall (c c' : cost), ltb c c' = true <-> lt c c'.
+Proof.
+  intros.
+  split ; intros; unfold ltb, lt in * ; destruct c, c'.
+  - apply Nat.ltb_lt. assumption.
+  - tauto.
+  - absurd (false = true).
+    * discriminate.
+    * assumption.
+  - absurd (false = true).
+    * discriminate.
+    * assumption.
+  - apply Nat.ltb_lt. assumption.
+  - reflexivity.
+  - contradiction.
+  - contradiction.
+Qed.
+
+Lemma leb_le : forall (c c' : cost), leb c c' = true <-> le c c'.
+Proof.
+  intros.
+  split ; intros; unfold leb, le in * ; destruct c, c'.
+  - apply Nat.leb_le. assumption.
+  - tauto.
+  - absurd (false = true).
+    * discriminate.
+    * assumption.
+  - tauto.
+  - apply Nat.leb_le. assumption.
+  - reflexivity.
+  - contradiction.
+  - reflexivity.
+Qed.
+
+Lemma eqb_reflect : forall (x y : cost), reflect (eq x y) (eqb x y).
+Proof.
+  intros x y. apply iff_reflect. symmetry.
+  apply eqb_eq.
+Qed.
+
+Lemma ltb_reflect : forall x y, reflect (lt x y) (ltb x y).
+Proof.
+  intros x y. apply iff_reflect. symmetry.
+  apply ltb_lt.
+Qed.
+
+Lemma leb_reflect : forall x y, reflect (le x y) (leb x y).
+Proof.
+  intros x y. apply iff_reflect. symmetry.
+  apply leb_le.
+Qed.
+
+Hint Resolve ltb_reflect leb_reflect eqb_reflect : bdestruct.
+
+Ltac bdestruct X :=
+  let H := fresh in let e := fresh "e" in
+   evar (e: Prop);
+   assert (H: reflect e X); subst e;
+    [eauto with bdestruct
+    | destruct H as [H|H];
+       [ | try first [apply not_lt in H | apply not_le in H]]].
+
+Inductive prev :=
+| id (v : nat)
+| UNDEF.
+
+Definition total_map (A : Type) := nat -> A.
+Definition empty_map {A : Type} (v : A) : total_map A := fun _ => v.
+Definition update_map {A : Type} (map : total_map A) (k : nat) (v : A) : total_map A :=
+  fun id => if id =? k then v else map id.
+
+Definition cost_map : Type := total_map cost.
+Definition prev_map : Type := total_map prev.
+
+Lemma le_gt_le : forall (c c' c'' : cost), le c c' -> ~ le c'' c' -> le c c''.
+Proof.
+  intros. unfold le, leb in *.
+  destruct c, c', c'' ; try (tauto ; contradiction). lia.
+Qed.
+
+Fixpoint select_min_in_cost_map
+  (x : nat) (l : list nat) (cost : cost_map) : nat * list nat :=
   match l with
   | [] => (x, [])
   | hd :: tl =>
-    if has_priority_over x hd
+    if leb (cost x) (cost hd)
     then
-      let (y, l') := select_priority x tl has_priority_over in
+      let (y, l') := select_min_in_cost_map x tl cost in
       (y, hd :: l')
     else
-      let (y, l') := select_priority hd tl has_priority_over in
+      let (y, l') := select_min_in_cost_map hd tl cost in
       (y, x :: l')
   end.
 
-Definition dist_smaller (dist: dist_map) (v v' : vertex_id) : bool :=
-  match dist v, dist v' with
-  | Some (reachable dv), Some (reachable dv') => dv <=? dv'
-  | Some (unreachable), Some (reachable _) => false
-  | _, _ => true
-  end.
+Lemma select_perm: forall x l cost,
+  let (y, r) := select_min_in_cost_map x l cost in
+  Permutation (x :: l) (y :: r).
+Proof.
+intros x l. generalize dependent x.
+induction l; intros; simpl in *.
+- apply Permutation_refl.
+- bdestruct (leb (cost0 x) (cost0 a)).
+  + specialize (IHl x cost0). destruct (select_min_in_cost_map x l cost0).
+    Search (Permutation (_ :: _ :: _) (_ :: _ :: _)).
+    rewrite perm_swap. apply Permutation_sym. rewrite perm_swap.
+    apply perm_skip. apply Permutation_sym. apply IHl.
+  + specialize (IHl a cost0). destruct (select_min_in_cost_map a l cost0).
+    apply Permutation_sym. rewrite perm_swap.
+    apply perm_skip. apply Permutation_sym. apply IHl.
+Qed.
 
-Definition priqueue : Type := list vertex_id.
-Definition insert (v : vertex_id) (q : priqueue) : priqueue := v :: q.
+Lemma select_smallest_aux: forall x al y bl cost,
+  Forall (fun z => le (cost y) (cost z)) bl ->
+  select_min_in_cost_map x al cost = (y, bl) ->
+  le (cost y) (cost x).
+Proof.
+intros x al y bl cost HF Hs. assert (Hsp := select_perm x al cost).
+destruct (select_min_in_cost_map x al cost). inversion Hs. subst.
+Search (Permutation _ _ -> In _ _ -> In _ _).
+apply Permutation_in with (x := x) in Hsp.
+- destruct Hsp.
+  + rewrite H. apply le_refl.
+  + Check Forall_forall. rewrite Forall_forall in HF.
+    apply HF. apply H.
+- unfold In. left. reflexivity.
+Qed.
+
+Lemma select_min_correct:
+  forall x l y l' cost,
+  select_min_in_cost_map x l cost = (y, l') ->
+  Forall (fun v => le (cost y) (cost v)) l'.
+Proof.
+  intros x al. generalize dependent x.
+  induction al; intros; simpl in *.
+  - inversion H. subst. Search (Forall _ []). apply Forall_nil.
+  - bdestruct (leb (cost0 x) (cost0 a)).
+    + destruct (select_min_in_cost_map x al cost0) eqn:?H. inversion H. subst. clear H.
+      Search (Forall _ (_ :: _)). apply Forall_cons. 
+      * Check le_trans. apply le_trans with (c' := cost0 x).
+        { apply (select_smallest_aux x al y l cost0).
+          - apply IHal with (x := x). apply H1.
+          - apply H1. }
+        { apply H0. }
+      * apply IHal with (x := x). apply H1.
+    + destruct (select_min_in_cost_map a al cost0) eqn:?H. inversion H. subst.
+      apply Forall_cons.
+      * assert (Hs: le (cost0 y) (cost0 a)).
+        { apply (select_smallest_aux _ al _ l).
+          - apply IHal with (x := a). apply H1.
+          - apply H1. }
+        { apply le_gt_le with (c' := cost0 a); assumption. }
+      * apply IHal with (x := a). apply H1.
+Qed.
+ 
+Lemma select_min_length_constant: 
+  forall
+    (x y : nat) (l l' : list nat) (cost : cost_map),
+  select_min_in_cost_map x l cost = (y, l') ->
+  length l = length l'.
+Proof.
+  intros. 
+  assert (Hsp := select_perm x l cost0).
+  destruct (select_min_in_cost_map x l cost0) eqn:Eq_let in Hsp.
+  apply Permutation_length in Hsp.
+  rewrite H in Eq_let.
+  apply pair_equal_spec in Eq_let.
+  inversion Eq_let. simpl in Hsp.
+  Search (S _ = S _ -> _ = _).
+  rewrite <- H1 in Hsp.
+  rewrite Nat.succ_inj_wd in Hsp.
+  assumption.
+Qed.
+
+Definition subset (s s' : set nat) : Prop :=
+  Forall (fun x => set_In x s') s.
+Definition eq_set (s s' : set nat) : Prop :=
+  subset s s' /\ subset s' s.
+
+Lemma subset_trans : forall (s s' s'' : set nat),
+  subset s s' -> subset s' s'' -> subset s s''.
+Proof.
+  intros.
+  unfold subset in *.
+  rewrite Forall_forall in *.
+  unfold set_In in *.
+  intro.
+  specialize (H x).
+  specialize (H0 x).
+  Search ((_ -> _) /\ (_ -> _) -> (_ -> _)).
+  intro.
+  apply H in H1.
+  apply H0 in H1.
+  assumption.
+Qed.
+
+Lemma Permutation_tail_subset : forall u s s',
+  Permutation s' (u :: s) -> subset s s'.
+Proof.
+  intros.
+  unfold subset. rewrite Forall_forall. unfold set_In.
+  intros.
+  apply Permutation_sym in H.
+  apply Permutation_in with (x := x) in H.
+  - assumption.
+  - simpl. right. assumption.
+Qed.
+
+Definition priqueue : Type := set nat.
 Definition extract_min 
-  (dist: dist_map) (q: priqueue) : (option vertex_id) * priqueue :=
+  (q : priqueue) (cost : cost_map) : option (nat * priqueue) :=
   match q with
-  | [] => (None, q)
+  | [] => None
   | hd :: tl =>
-    let (extracted_v, extracted_q) := select_priority hd tl (dist_smaller dist) in
-    (Some extracted_v, extracted_q)
+    let (v', q') := select_min_in_cost_map hd tl cost in
+    Some (pair v' q')
   end.
 
-Definition adjacent_v_ids
-  (e_list : list edge) (u : vertex_id) : list vertex_id :=
-  map dest (filter (edge_src_eq_bool u) e_list).
+Lemma option_equal_implies_boxed_equal : forall (A : Type) (v v' : A),
+  Some v = Some v' -> v = v'.
+Proof. intros. inversion H. reflexivity. Qed.
 
-Fixpoint dijkstra_loop
-  (n : nat)
-  (s : list vertex_id)
-  (q : priqueue)
-  (e_list : list edge)
-  (wm : weight_map)
-  (dist : dist_map)
-  (pred : pred_map) : list vertex_id * priqueue * dist_map * pred_map :=
-  match n with
-  | O => (s, q, dist, pred)
-  | S n' =>
-    match extract_min dist q with
-    | (Some u, q') =>
-      let s' := u :: s in
-      let adj_v_ids := adjacent_v_ids e_list u in
-      let (dist', pred') := fold_left (relax wm u) adj_v_ids (dist, pred) in
-      dijkstra_loop n' s' q' e_list wm dist' pred'
-    | _ => (s, q, dist, pred)
-    end
+Lemma extract_perm : forall u q' q cost,
+  extract_min q cost = Some (u, q') ->
+  Permutation q (u :: q').
+Proof.
+  intros.
+  unfold extract_min in H.
+  destruct q.
+  - absurd (None = Some (u, q')).
+    + discriminate.
+    + assumption.
+  - assert (Hsp := select_perm n q cost0).
+    destruct (select_min_in_cost_map n q cost0) eqn:Eq_let.
+    apply option_equal_implies_boxed_equal in H.
+    apply pair_equal_spec in H.
+    inversion H. rewrite <- H0, <- H1. assumption.
+Qed.
+
+Lemma extract_min_res_subset : forall (u : nat) (q q' : priqueue) (cost : cost_map),
+  extract_min q cost = Some (u, q') ->
+  subset q' q.
+Proof.
+  intros.
+  unfold extract_min in H.
+  destruct q eqn:Eqq.
+  - absurd (None = Some (u, q')).
+    + discriminate.
+    + assumption.
+  - assert (Hsp := select_perm n p cost0).
+    destruct (select_min_in_cost_map n p cost0) eqn:Eq_let.
+    apply option_equal_implies_boxed_equal in H.
+    apply pair_equal_spec in H.
+    inversion H. subst. clear H.
+    apply Permutation_tail_subset in Hsp.
+    assumption.
+Qed.
+
+Lemma extract_min_non_empty_not_none: 
+  forall (q : priqueue) (cost : cost_map) (res : option (nat * priqueue)),
+  q <> [] -> res = extract_min q cost -> res <> None.
+Proof.
+  unfold extract_min.
+  intros.
+  inversion H0. subst.
+  destruct q eqn:Eqq.
+  - contradiction.
+  - now destruct (select_min_in_cost_map n p cost0).
+Qed.
+
+Lemma extract_min_decreases_len_q : forall q q' u cost,
+  Some (u, q') = extract_min q cost ->
+  length q' < length q.
+Proof. 
+  intros.
+  unfold extract_min in H.
+  destruct q eqn:Eqq.
+  - absurd (Some (u, q') = None).
+    + discriminate.
+    + assumption.
+  - destruct (select_min_in_cost_map n p cost0) eqn:Eq_let.
+    apply select_min_length_constant in Eq_let.
+    apply option_equal_implies_boxed_equal in H.
+    apply pair_equal_spec in H.
+    inversion H. subst.
+    simpl. rewrite Eq_let.
+    nia.
+Qed.
+
+Record DijkstraStruct : Type := mkDS
+  {
+    C : cost_map ;
+    P : prev_map
+  }.
+
+Definition empty := mkDS (empty_map INF) (empty_map UNDEF).
+
+Definition initialize_single_source (G : DWGraph) (s : nat) : DijkstraStruct :=
+  mkDS (update_map (empty_map INF) s (value 0)) (empty_map UNDEF).
+
+Definition relax 
+  (G : DWGraph) 
+  (u : nat)
+  (DS : DijkstraStruct) 
+  (v : nat) : DijkstraStruct :=
+  match C DS u with
+  | value cu =>
+    let sum_u_w := value (cu + (W G u v)) in
+    if ltb sum_u_w (C DS v)
+    then
+      let C' := update_map (C DS) v sum_u_w in
+      let P' := update_map (P DS) v (id u) in
+      mkDS C' P'
+    else DS
+  | INF => DS
   end.
 
-Definition dijkstra_aux (g : graph) (wm : weight_map) (s: vertex_id) : dist_map * pred_map :=
-  match g with (v_list, e_list) =>
-    let (init_dist, init_pred) := init_single_source v_list s in
-    let s := [] in
-    let q := v_list in
-    let '(s', q', dist', pred') := dijkstra_loop (length q) s q e_list wm init_dist init_pred in
-    (dist', pred')
-  end.
+Definition relax_adjacents 
+  (G : DWGraph) 
+  (DS : DijkstraStruct)
+  (u : nat) : DijkstraStruct :=
+  let adj_v_ids := adjacent_v_ids G u in
+  fold_left (relax G u) adj_v_ids DS.
 
-Definition dijkstra (g : graph) (s : vertex_id) : dist_map * pred_map :=
-  let wm := init_weight_map_from_graph g in
-  dijkstra_aux g wm s.
+Function dijkstra_loop 
+  (* (fuel : nat) *) (G : DWGraph) 
+  (q : priqueue) 
+  (DS : DijkstraStruct) {measure length q}: priqueue * DijkstraStruct := 
+  match extract_min q (C DS) with
+  | Some (u, q') =>
+    let DS' := relax_adjacents G DS u in
+    dijkstra_loop G q' DS'
+  | _ => (q, DS)
+  end.
+Proof.
+  intros.
+  symmetry in teq.
+  apply (extract_min_decreases_len_q q q' u (C DS)) in teq.
+  assumption.
+Defined.
+
+Definition dijkstra (G : DWGraph) (s : nat) : DijkstraStruct :=
+  let DS := initialize_single_source G s in
+  let q := all_nodes G in
+  let (q', DS') := dijkstra_loop G q DS in
+  DS'.
 
 End Dijkstra.
